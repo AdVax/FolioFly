@@ -7,7 +7,7 @@
    Template visuals live in templates.js.
    ========================================================= */
 
-const STORAGE_KEY = 'foliofly_cvs_v1';
+const STORAGE_KEY = 'foliofly_cvs_v3';
 
 /* ---------------- toast (system-status feedback) ---------------- */
 function showToast(msg){
