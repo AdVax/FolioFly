@@ -9,6 +9,21 @@
 
 const STORAGE_KEY = 'foliofly_cvs_v1';
 
+/* ---------------- toast (system-status feedback) ---------------- */
+function showToast(msg){
+  let t = document.getElementById('flyToast');
+  if(!t){
+    t = document.createElement('div');
+    t.id = 'flyToast';
+    t.style.cssText = 'position:fixed; bottom:88px; left:50%; transform:translateX(-50%) translateY(10px); background:#1e222b; color:#eceef2; border:1px solid #2a2f3a; padding:10px 18px; border-radius:999px; font-size:13px; z-index:100; opacity:0; transition:opacity .25s ease, transform .25s ease; max-width:82%; text-align:center; pointer-events:none; box-shadow:0 6px 20px rgba(0,0,0,.35);';
+    document.body.appendChild(t);
+  }
+  t.textContent = msg;
+  requestAnimationFrame(()=>{ t.style.opacity='1'; t.style.transform='translateX(-50%) translateY(0)'; });
+  clearTimeout(t._hideTimer);
+  t._hideTimer = setTimeout(()=>{ t.style.opacity='0'; t.style.transform='translateX(-50%) translateY(10px)'; }, 1500);
+}
+
 function uid(){ return 'cv_' + Date.now() + '_' + Math.random().toString(36).slice(2,8); }
 
 function loadCVs(){
@@ -409,6 +424,7 @@ function renderItemListScreen(){
   }));
   document.querySelectorAll('.rm-item').forEach(b=>b.addEventListener('click', ()=>{
     updateCurrentCV(c=>{ c[key] = c[key].filter(i=>i.id!==b.dataset.id); });
+    showToast('تم الحذف');
     renderItemListScreen();
   }));
 }
@@ -420,51 +436,66 @@ function renderItemFormScreen(){
   const meta = SECTION_META[key];
   const cv = getCurrentCV();
   const isNew = !state.editingItemId;
-  const item = isNew ? null : cv[key].find(i=>i.id===state.editingItemId);
-  backBtn.onclick = ()=>{ state.screen='item-list'; render(); };
+
+  // Autosave means "new" items must exist immediately so every keystroke has
+  // somewhere to land — create the record up front, then edit it in place.
+  if(isNew){
+    const blank = { id: uid() };
+    meta.fields.forEach(f=>{ blank[f.key]=''; });
+    updateCurrentCV(c=>{ c[key].push(blank); });
+    state.editingItemId = blank.id;
+  }
+  const item = getCurrentCV()[key].find(i=>i.id===state.editingItemId);
+
+  backBtn.onclick = ()=>{ state.screen='item-list'; state.editingItemId=null; render(); };
 
   let html = `<div style="font-size:16px; font-weight:700; margin-bottom:14px;">${isNew?'إضافة':'تعديل'} — ${meta.title}</div>`;
-  let row = '';
-  meta.fields.forEach((f,i)=>{
-    const val = item ? (item[f.key]||'') : '';
-    const isHalfOpenPair = f.half && i>0 && meta.fields[i-1].half && !row;
-    const inputTag = f.multiline
-      ? `<textarea id="itf_${f.key}">${val}</textarea>`
-      : `<input id="itf_${f.key}" value="${attr(val)}" ${f.placeholder?`placeholder="${f.placeholder}"`:''}>`;
-    if(f.half){
-      row += `<div class="field"><label>${f.label}</label>${inputTag}</div>`;
-      if(row.split('<div class="field">').length-1 === 2){
-        html += `<div class="row2">${row}</div>`;
-        row = '';
-      }
+  let i = 0;
+  while(i < meta.fields.length){
+    const f = meta.fields[i];
+    const val = item[f.key] || '';
+    if(f.half && meta.fields[i+1] && meta.fields[i+1].half){
+      const f2 = meta.fields[i+1];
+      const val2 = item[f2.key] || '';
+      html += `<div class="row2">
+        <div class="field"><label>${f.label}</label><input id="itf_${f.key}" value="${attr(val)}" ${f.placeholder?`placeholder="${f.placeholder}"`:''}></div>
+        <div class="field"><label>${f2.label}</label><input id="itf_${f2.key}" value="${attr(val2)}" ${f2.placeholder?`placeholder="${f2.placeholder}"`:''}></div>
+      </div>`;
+      i += 2;
     } else {
+      const inputTag = f.multiline
+        ? `<textarea id="itf_${f.key}">${val}</textarea>`
+        : `<input id="itf_${f.key}" value="${attr(val)}" ${f.placeholder?`placeholder="${f.placeholder}"`:''}>`;
       html += `<div class="field"><label>${f.label}</label>${inputTag}</div>`;
+      i += 1;
     }
-  });
-  if(row) html += row; // odd leftover half field
+  }
 
   html += `<div class="bottom-bar" style="position:fixed;">
-    ${!isNew?'<button class="btn-preview" id="deleteItemBtn">حذف</button>':''}
-    <button class="btn-pdf" id="saveItemBtn" style="width:100%;">حفظ</button>
+    <button class="btn-preview" id="deleteItemBtn" style="color:var(--danger); flex:0 0 90px;">حذف</button>
+    <button class="btn-pdf" id="doneItemBtn" style="width:100%;">تم</button>
   </div>`;
   main.innerHTML = html;
 
-  document.getElementById('saveItemBtn').addEventListener('click', ()=>{
-    const values = {};
-    meta.fields.forEach(f=>{ values[f.key] = document.getElementById('itf_'+f.key).value; });
-    updateCurrentCV(c=>{
-      if(isNew){
-        c[key].push(Object.assign({id:uid()}, values));
-      } else {
-        const it = c[key].find(i=>i.id===state.editingItemId);
-        if(it) Object.assign(it, values);
-      }
+  meta.fields.forEach(f=>{
+    document.getElementById('itf_'+f.key).addEventListener('input', (e)=>{
+      updateCurrentCV(c=>{
+        const it = c[key].find(x=>x.id===state.editingItemId);
+        if(it) it[f.key] = e.target.value;
+      });
     });
+  });
+  document.getElementById('doneItemBtn').addEventListener('click', ()=>{
+    // Drop the entry silently if the user added it but left every field empty.
+    const cur = getCurrentCV()[key].find(x=>x.id===state.editingItemId);
+    const isEmpty = cur && meta.fields.every(f=>!cur[f.key]);
+    if(isEmpty) updateCurrentCV(c=>{ c[key] = c[key].filter(x=>x.id!==state.editingItemId); });
+    else showToast('تم الحفظ');
     state.screen='item-list'; state.editingItemId=null; render();
   });
-  const delBtn = document.getElementById('deleteItemBtn');
-  if(delBtn) delBtn.addEventListener('click', ()=>{
-    updateCurrentCV(c=>{ c[key] = c[key].filter(i=>i.id!==state.editingItemId); });
+  document.getElementById('deleteItemBtn').addEventListener('click', ()=>{
+    updateCurrentCV(c=>{ c[key] = c[key].filter(x=>x.id!==state.editingItemId); });
+    showToast('تم الحذف');
     state.screen='item-list'; state.editingItemId=null; render();
   });
 }
@@ -507,6 +538,7 @@ function renderRatedListScreen(){
     const val = input.value.trim();
     if(!val) return;
     updateCurrentCV(c=>{ if(!c[key]) c[key]=[]; c[key].push({id:uid(), name:val, rating:4}); });
+    showToast('تمت الإضافة');
     renderRatedListScreen();
   });
   document.getElementById('newItemInput').addEventListener('keydown', (e)=>{
@@ -523,6 +555,7 @@ function renderRatedListScreen(){
   });
   document.querySelectorAll('.rated-rm').forEach(b=>b.addEventListener('click', ()=>{
     updateCurrentCV(c=>{ c[key] = c[key].filter(i=>i.id!==b.dataset.id); });
+    showToast('تم الحذف');
     renderRatedListScreen();
   }));
 }
@@ -530,6 +563,11 @@ function renderRatedListScreen(){
 /* ---------------- PREVIEW / PDF ---------------- */
 function openPreview(){
   const cv = getCurrentCV();
+  if(!cv.personal.fullName || !cv.personal.jobTitle){
+    showToast('أكمل الاسم والمسمى الوظيفي أولًا');
+    state.screen='personal'; render();
+    return;
+  }
   const tpl = getTemplate(cv.templateId);
   const lang = cv.language || 'ar';
   const paper = document.getElementById('resume-paper');
