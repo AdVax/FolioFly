@@ -103,6 +103,7 @@ function animateMain(){
   main.classList.remove('screen-enter');
   void main.offsetWidth; // force reflow
   main.classList.add('screen-enter');
+  renderMiniPreview();
 }
 
 /* ---------------- LIST SCREEN (all CVs) ---------------- */
@@ -230,6 +231,36 @@ function updateCurrentCV(mutator){
   mutator(list[idx]);
   list[idx].updatedAt = Date.now();
   saveCVs(list);
+  renderMiniPreview();
+}
+
+/* ---------------- persistent live mini-preview ----------------
+   Top resume builders (Kickresume, Enhancv, Resume.io) never make you
+   leave editing to see the result — preview stays live at all times.
+   A full split-screen doesn't fit a narrow phone, so this is the mobile
+   equivalent: a small floating thumbnail that always reflects the
+   current data, tap to expand into the full preview. */
+function renderMiniPreview(){
+  const shouldShow = state.currentId && !['list','template'].includes(state.screen);
+  let box = document.getElementById('miniPreview');
+  if(!shouldShow){ if(box) box.remove(); return; }
+  const cv = getCurrentCV();
+  if(!cv){ if(box) box.remove(); return; }
+  const tpl = getTemplate(cv.templateId);
+  const lang = cv.language || 'ar';
+  if(!box){
+    box = document.createElement('div');
+    box.id = 'miniPreview';
+    box.title = 'اضغط للمعاينة الكاملة';
+    box.style.cssText = 'position:fixed; bottom:92px; inset-inline-end:14px; width:54px; height:76px; background:#fff; border-radius:7px; box-shadow:0 6px 18px rgba(0,0,0,.45); overflow:hidden; z-index:40; cursor:pointer; border:2px solid var(--accent); transition:transform .15s cubic-bezier(.22,1,.36,1);';
+    box.innerHTML = '<div id="miniPreviewInner" style="width:480px; height:680px; transform:scale(0.1125); transform-origin:top left; pointer-events:none;"></div>';
+    box.addEventListener('click', openPreview);
+    box.addEventListener('touchstart', ()=>{ box.style.transform='scale(.92)'; }, {passive:true});
+    box.addEventListener('touchend', ()=>{ box.style.transform='scale(1)'; });
+    document.body.appendChild(box);
+  }
+  const inner = box.querySelector('#miniPreviewInner');
+  try{ inner.innerHTML = tpl.render(cv, lang); }catch(e){ /* stale data mid-edit — ignore, next update will fix it */ }
 }
 function goHome(){ state.screen='home'; state.sectionKey=null; state.editingItemId=null; render(); }
 
