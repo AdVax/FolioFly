@@ -1,8 +1,10 @@
 /* =========================================================
    FolioFly — app.js
-   All app behavior: CV storage, list screen, template picker,
-   accordion editor, photo crop/compress, live preview + PDF.
-   Template visuals themselves live in templates.js.
+   Sequential data-entry UX: a per-CV "home" dashboard (like a
+   dashboard of section cards) instead of one long accordion.
+   Each section (personal / experience / education / skills /
+   languages) is its own full screen, entered one at a time.
+   Template visuals live in templates.js.
    ========================================================= */
 
 const STORAGE_KEY = 'foliofly_cvs_v1';
@@ -21,7 +23,7 @@ function blankCV(name){
     name: name || 'سيرة ذاتية جديدة',
     updatedAt: Date.now(),
     templateId: null,
-    language: 'ar', // 'ar' | 'en' — controls resume text direction + section labels
+    language: 'ar',
     photo: null,
     personal: { fullName:'', jobTitle:'', email:'', phone:'', city:'', summary:'' },
     experience: [],
@@ -31,7 +33,32 @@ function blankCV(name){
   };
 }
 
-let state = { screen:'list', currentId:null, openSection:'personal' };
+// section metadata used by the generic list/rated screens
+const SECTION_META = {
+  experience: { title:'الخبرات العملية', icon:'💼', addLabel:'إضافة خبرة',
+    fields:[
+      {key:'role', label:'المسمى الوظيفي'},
+      {key:'company', label:'جهة العمل'},
+      {key:'start', label:'من', half:true, placeholder:'2023'},
+      {key:'end', label:'إلى', half:true, placeholder:'حتى الآن'},
+      {key:'desc', label:'الوصف', multiline:true}
+    ],
+    titleField:'role', subField:'company' },
+  education: { title:'الشهادات والتعليم', icon:'🎓', addLabel:'إضافة شهادة',
+    fields:[
+      {key:'degree', label:'الدرجة العلمية / الشهادة'},
+      {key:'school', label:'الجامعة أو المعهد'},
+      {key:'start', label:'من', half:true},
+      {key:'end', label:'إلى', half:true}
+    ],
+    titleField:'degree', subField:'school' }
+};
+const RATED_META = {
+  skills: { title:'المهارات', icon:'🧠', placeholder:'اكتب اسم مهارة (مثال: Excel)' },
+  languages: { title:'اللغات', icon:'🌐', placeholder:'اكتب اسم لغة (مثال: الإنجليزية)' }
+};
+
+let state = { screen:'list', currentId:null, sectionKey:null, editingItemId:null };
 
 const main = document.getElementById('main');
 const backBtn = document.getElementById('backBtn');
@@ -39,10 +66,14 @@ const backBtn = document.getElementById('backBtn');
 function render(){
   if(state.screen === 'list') renderList();
   else if(state.screen === 'template') renderTemplatePicker();
-  else renderEditor();
+  else if(state.screen === 'home') renderHome();
+  else if(state.screen === 'personal') renderPersonalScreen();
+  else if(state.screen === 'item-list') renderItemListScreen();
+  else if(state.screen === 'item-form') renderItemFormScreen();
+  else if(state.screen === 'rated-list') renderRatedListScreen();
 }
 
-/* ---------------- LIST SCREEN ---------------- */
+/* ---------------- LIST SCREEN (all CVs) ---------------- */
 function renderList(){
   backBtn.style.display = 'none';
   const cvs = loadCVs().sort((a,b)=>b.updatedAt-a.updatedAt);
@@ -78,7 +109,8 @@ function renderList(){
   document.querySelectorAll('.cv-card').forEach(card=>{
     card.addEventListener('click', (e)=>{
       if(e.target.closest('.actions')) return;
-      openEditor(card.dataset.id);
+      state.currentId = card.dataset.id; state.screen='home';
+      render();
     });
   });
   document.querySelectorAll('.dup-btn').forEach(btn=>btn.addEventListener('click', ()=>duplicateCV(btn.dataset.id)));
@@ -123,7 +155,7 @@ document.getElementById('confirmOk').addEventListener('click', ()=>{
   renderList();
 });
 
-/* ---------------- TEMPLATE PICKER SCREEN ---------------- */
+/* ---------------- TEMPLATE PICKER ---------------- */
 function renderTemplatePicker(){
   backBtn.style.display='block';
   let html = `<div style="font-size:15px; font-weight:700; margin-bottom:4px;">اختر قالبًا</div>
@@ -145,18 +177,18 @@ function renderTemplatePicker(){
   document.querySelectorAll('.tpl-card').forEach(card=>{
     card.addEventListener('click', ()=>{
       updateCurrentCV(c=>{ c.templateId = card.dataset.tid; });
-      state.screen='editor'; state.openSection='personal';
+      state.screen='home';
       render();
     });
   });
 }
 
-/* ---------------- EDITOR SCREEN ---------------- */
-function openEditor(id){
-  state.screen='editor'; state.currentId=id; state.openSection='personal';
-  render();
+/* ---------------- shared helpers ---------------- */
+function getCurrentCV(){
+  const cv = loadCVs().find(c=>c.id===state.currentId);
+  if(cv && !cv.languages) cv.languages = [];
+  return cv;
 }
-function getCurrentCV(){ return loadCVs().find(c=>c.id===state.currentId); }
 function updateCurrentCV(mutator){
   const list = loadCVs();
   const idx = list.findIndex(c=>c.id===state.currentId);
@@ -165,14 +197,7 @@ function updateCurrentCV(mutator){
   list[idx].updatedAt = Date.now();
   saveCVs(list);
 }
-
-const SECTIONS = [
-  {key:'personal', title:'المعلومات الشخصية'},
-  {key:'experience', title:'الخبرات العملية'},
-  {key:'education', title:'التعليم'},
-  {key:'skills', title:'المهارات'},
-  {key:'languages', title:'اللغات'}
-];
+function goHome(){ state.screen='home'; state.sectionKey=null; state.editingItemId=null; render(); }
 
 function sectionFilled(cv, key){
   if(key==='personal') return !!(cv.personal.fullName && cv.personal.jobTitle);
@@ -182,20 +207,65 @@ function sectionFilled(cv, key){
   if(key==='languages') return (cv.languages||[]).length>0;
   return false;
 }
+function overallPct(cv){
+  const keys = ['personal','experience','education','skills','languages'];
+  const filled = keys.filter(k=>sectionFilled(cv,k)).length;
+  return Math.round((filled/keys.length)*100);
+}
+function ringSvg(pct){
+  const r = 40, c = 2*Math.PI*r;
+  const offset = c * (1 - pct/100);
+  return `<div class="ring-wrap">
+    <svg width="96" height="96" viewBox="0 0 90 90">
+      <circle cx="45" cy="45" r="${r}" stroke="var(--bg-elev2)" stroke-width="8" fill="none"/>
+      <circle cx="45" cy="45" r="${r}" stroke="var(--accent)" stroke-width="8" fill="none"
+        stroke-dasharray="${c}" stroke-dashoffset="${offset}" stroke-linecap="round"
+        transform="rotate(-90 45 45)"/>
+    </svg>
+    <div class="ring-label">${pct}%</div>
+  </div>`;
+}
 
-function renderEditor(){
+/* ---------------- HOME (per-CV dashboard) ---------------- */
+function renderHome(){
   backBtn.style.display='block';
   const cv = getCurrentCV();
   if(!cv){ state.screen='list'; return render(); }
-  if(!cv.languages) cv.languages = []; // migrate CVs created before this field existed
-
   const tpl = getTemplate(cv.templateId);
   const lang = cv.language || 'ar';
-  const filledCount = SECTIONS.filter(s=>sectionFilled(cv,s.key)).length;
-  const pct = Math.round((filledCount/SECTIONS.length)*100);
+  const pct = overallPct(cv);
 
-  let html = `
-    <div class="tpl-current-row">
+  let html = ringSvg(pct);
+  html += `<div style="text-align:center; font-size:12.5px; color:var(--text-dim); margin-bottom:18px;">${escapeHtml(cv.name)}</div>`;
+
+  html += `<div class="home-header" id="personalRow">
+    <div class="avatar">${cv.photo?`<img src="${cv.photo}">`:'صورة'}</div>
+    <div style="flex:1;">
+      <div class="name">${escapeHtml(cv.personal.fullName || 'أضف اسمك')}</div>
+      <div class="sub">${escapeHtml(cv.personal.jobTitle || 'المعلومات الشخصية')}</div>
+    </div>
+    <div class="chev">›</div>
+  </div>`;
+
+  const rows = [
+    {key:'education', label:SECTION_META.education.title, icon:SECTION_META.education.icon, count:cv.education.length},
+    {key:'experience', label:SECTION_META.experience.title, icon:SECTION_META.experience.icon, count:cv.experience.length},
+    {key:'languages', label:RATED_META.languages.title, icon:RATED_META.languages.icon, count:(cv.languages||[]).length},
+    {key:'skills', label:RATED_META.skills.title, icon:RATED_META.skills.icon, count:cv.skills.length},
+  ];
+  rows.forEach(r=>{
+    html += `<div class="nav-row" data-nav="${r.key}">
+      <div class="nav-row-icon">${r.icon}</div>
+      <div class="nav-row-text">
+        <div class="nav-row-title">${r.label}</div>
+        <div class="nav-row-sub">${r.count>0? r.count+' مُضاف':'لم تتم الإضافة بعد'}</div>
+      </div>
+      <div class="nav-row-dot ${r.count>0?'filled':''}"></div>
+      <div class="chev">›</div>
+    </div>`;
+  });
+
+  html += `<div class="tpl-current-row" style="margin-top:16px;">
       <div><div class="lbl">القالب الحالي</div><div class="val">${tpl.name}</div></div>
       <button id="changeTplBtn">تغيير القالب</button>
     </div>
@@ -205,218 +275,78 @@ function renderEditor(){
         <button class="lang-opt" data-lang="ar" style="${lang==='ar'?'background:var(--accent-dim); border-color:var(--accent); color:var(--text);':''}">عربي</button>
         <button class="lang-opt" data-lang="en" style="${lang==='en'?'background:var(--accent-dim); border-color:var(--accent); color:var(--text);':''}">English</button>
       </div>
-    </div>
-    <div class="progress-wrap">
-      <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
-      <div class="progress-label">${escapeHtml(cv.name)} — اكتمال ${pct}%</div>
-    </div>
-  `;
+    </div>`;
 
-  SECTIONS.forEach(sec=>{
-    const isOpen = state.openSection===sec.key;
-    html += `
-      <div class="accordion-item ${isOpen?'open':''}" data-sec="${sec.key}">
-        <div class="accordion-head" data-toggle="${sec.key}">
-          <div class="title">
-            <span class="done-dot ${sectionFilled(cv,sec.key)?'filled':''}"></span>
-            ${sec.title}
-          </div>
-          <span class="chev">⌄</span>
-        </div>
-        <div class="accordion-body">${renderSectionBody(cv, sec.key)}</div>
-      </div>
-    `;
-  });
-
-  html += `
-    <div class="bottom-bar" style="position:fixed;">
+  html += `<div class="bottom-bar" style="position:fixed;">
       <button class="btn-preview" id="previewBtn">معاينة</button>
       <button class="btn-pdf" id="pdfBtn">تحميل PDF</button>
-    </div>
-  `;
+    </div>`;
 
   main.innerHTML = html;
-  wireEditorEvents(cv);
-}
 
-function renderSectionBody(cv, key){
-  if(key==='personal'){
-    const p = cv.personal;
-    return `
-      <div class="field photo-box">
-        <div class="photo-preview" id="photoPreview">${cv.photo? `<img src="${cv.photo}">` : 'صورة'}</div>
-        <div class="photo-btns">
-          <button id="uploadPhotoBtn" type="button">اختيار صورة</button>
-          ${cv.photo? '<button id="removePhotoBtn" type="button">إزالة</button>':''}
-          <input type="file" id="photoInput" accept="image/*" style="display:none;">
-        </div>
-      </div>
-      <div class="field"><label>الاسم الكامل</label><input id="f_fullName" value="${attr(p.fullName)}"></div>
-      <div class="field"><label>المسمى الوظيفي</label><input id="f_jobTitle" value="${attr(p.jobTitle)}"></div>
-      <div class="row2">
-        <div class="field"><label>البريد الإلكتروني</label><input id="f_email" value="${attr(p.email)}"></div>
-        <div class="field"><label>رقم الهاتف</label><input id="f_phone" value="${attr(p.phone)}"></div>
-      </div>
-      <div class="field"><label>المدينة</label><input id="f_city" value="${attr(p.city)}"></div>
-      <div class="field"><label>نبذة مختصرة</label><textarea id="f_summary">${p.summary||''}</textarea></div>
-    `;
-  }
-  if(key==='experience'){
-    let html = cv.experience.map(item=>`
-      <div class="repeatable-item" data-id="${item.id}">
-        <div class="field"><label>المسمى الوظيفي</label><input class="exp-role" data-id="${item.id}" value="${attr(item.role)}"></div>
-        <div class="field"><label>جهة العمل</label><input class="exp-company" data-id="${item.id}" value="${attr(item.company)}"></div>
-        <div class="row2">
-          <div class="field"><label>من</label><input class="exp-start" data-id="${item.id}" value="${attr(item.start)}" placeholder="2023"></div>
-          <div class="field"><label>إلى</label><input class="exp-end" data-id="${item.id}" value="${attr(item.end)}" placeholder="حتى الآن"></div>
-        </div>
-        <div class="field"><label>الوصف</label><textarea class="exp-desc" data-id="${item.id}">${item.desc||''}</textarea></div>
-        <div class="rm-row"><button class="rm-btn exp-rm" data-id="${item.id}">حذف هذه الخبرة</button></div>
-      </div>
-    `).join('');
-    html += `<button class="add-btn" id="addExpBtn">+ إضافة خبرة</button>`;
-    return html;
-  }
-  if(key==='education'){
-    let html = cv.education.map(item=>`
-      <div class="repeatable-item" data-id="${item.id}">
-        <div class="field"><label>الدرجة العلمية / الشهادة</label><input class="edu-degree" data-id="${item.id}" value="${attr(item.degree)}"></div>
-        <div class="field"><label>الجهة التعليمية</label><input class="edu-school" data-id="${item.id}" value="${attr(item.school)}"></div>
-        <div class="row2">
-          <div class="field"><label>من</label><input class="edu-start" data-id="${item.id}" value="${attr(item.start)}"></div>
-          <div class="field"><label>إلى</label><input class="edu-end" data-id="${item.id}" value="${attr(item.end)}"></div>
-        </div>
-        <div class="rm-row"><button class="rm-btn edu-rm" data-id="${item.id}">حذف</button></div>
-      </div>
-    `).join('');
-    html += `<button class="add-btn" id="addEduBtn">+ إضافة مؤهل</button>`;
-    return html;
-  }
-  if(key==='skills'){
-    let html = cv.skills.map(item=>`
-      <div class="repeatable-item" data-id="${item.id}" style="display:flex; align-items:center; gap:8px;">
-        <input class="skill-name" data-id="${item.id}" value="${attr(item.name)}" style="flex:1; background:var(--bg); border:1px solid var(--border); border-radius:8px; color:var(--text); padding:9px 10px;">
-        <button class="rm-btn skill-rm" data-id="${item.id}">حذف</button>
-      </div>
-    `).join('');
-    html += `<button class="add-btn" id="addSkillBtn">+ إضافة مهارة</button>`;
-    return html;
-  }
-  if(key==='languages'){
-    let html = `<div style="font-size:12px; color:var(--text-dim); margin-bottom:10px;">مثال: العربية (اللغة الأم)، الإنجليزية (جيد)</div>`;
-    html += cv.languages.map(item=>`
-      <div class="repeatable-item" data-id="${item.id}" style="display:flex; align-items:center; gap:8px;">
-        <input class="lang-name" data-id="${item.id}" value="${attr(item.name)}" style="flex:1; background:var(--bg); border:1px solid var(--border); border-radius:8px; color:var(--text); padding:9px 10px;">
-        <button class="rm-btn lang-rm" data-id="${item.id}">حذف</button>
-      </div>
-    `).join('');
-    html += `<button class="add-btn" id="addLangBtn">+ إضافة لغة</button>`;
-    return html;
-  }
-  return '';
-}
-
-function wireEditorEvents(cv){
-  document.getElementById('backBtn').onclick = ()=>{ state.screen='list'; render(); };
+  backBtn.onclick = ()=>{ state.screen='list'; render(); };
+  document.getElementById('personalRow').addEventListener('click', ()=>{ state.screen='personal'; render(); });
+  document.querySelectorAll('.nav-row').forEach(row=>{
+    row.addEventListener('click', ()=>{
+      const key = row.dataset.nav;
+      if(SECTION_META[key]){ state.screen='item-list'; state.sectionKey=key; }
+      else { state.screen='rated-list'; state.sectionKey=key; }
+      render();
+    });
+  });
   document.getElementById('changeTplBtn').addEventListener('click', ()=>{ state.screen='template'; render(); });
   document.querySelectorAll('.lang-opt').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      updateCurrentCV(c=>{ c.language = btn.dataset.lang; });
-      renderEditor();
-    });
+    btn.addEventListener('click', ()=>{ updateCurrentCV(c=>{ c.language = btn.dataset.lang; }); renderHome(); });
   });
-
-  document.querySelectorAll('[data-toggle]').forEach(head=>{
-    head.addEventListener('click', ()=>{
-      const key = head.dataset.toggle;
-      state.openSection = state.openSection===key ? null : key;
-      renderEditor();
-    });
-  });
-
-  const bind = (id, path)=>{
-    const el = document.getElementById(id);
-    if(!el) return;
-    el.addEventListener('input', ()=>{ updateCurrentCV(c=>{ c.personal[path] = el.value; }); });
-  };
-  bind('f_fullName','fullName'); bind('f_jobTitle','jobTitle'); bind('f_email','email');
-  bind('f_phone','phone'); bind('f_city','city'); bind('f_summary','summary');
-
-  const uploadBtn = document.getElementById('uploadPhotoBtn');
-  if(uploadBtn){
-    uploadBtn.addEventListener('click', ()=>document.getElementById('photoInput').click());
-    document.getElementById('photoInput').addEventListener('change', handlePhotoUpload);
-  }
-  const removeBtn = document.getElementById('removePhotoBtn');
-  if(removeBtn) removeBtn.addEventListener('click', ()=>{ updateCurrentCV(c=>{ c.photo=null; }); renderEditor(); });
-
-  const addExp = document.getElementById('addExpBtn');
-  if(addExp) addExp.addEventListener('click', ()=>{
-    updateCurrentCV(c=>c.experience.push({id:uid(), role:'', company:'', start:'', end:'', desc:''}));
-    renderEditor();
-  });
-  bindRepeatable('exp-role','experience','role');
-  bindRepeatable('exp-company','experience','company');
-  bindRepeatable('exp-start','experience','start');
-  bindRepeatable('exp-end','experience','end');
-  bindRepeatable('exp-desc','experience','desc');
-  document.querySelectorAll('.exp-rm').forEach(b=>b.addEventListener('click', ()=>{
-    updateCurrentCV(c=>{ c.experience = c.experience.filter(i=>i.id!==b.dataset.id); });
-    renderEditor();
-  }));
-
-  const addEdu = document.getElementById('addEduBtn');
-  if(addEdu) addEdu.addEventListener('click', ()=>{
-    updateCurrentCV(c=>c.education.push({id:uid(), degree:'', school:'', start:'', end:''}));
-    renderEditor();
-  });
-  bindRepeatable('edu-degree','education','degree');
-  bindRepeatable('edu-school','education','school');
-  bindRepeatable('edu-start','education','start');
-  bindRepeatable('edu-end','education','end');
-  document.querySelectorAll('.edu-rm').forEach(b=>b.addEventListener('click', ()=>{
-    updateCurrentCV(c=>{ c.education = c.education.filter(i=>i.id!==b.dataset.id); });
-    renderEditor();
-  }));
-
-  const addSkill = document.getElementById('addSkillBtn');
-  if(addSkill) addSkill.addEventListener('click', ()=>{
-    updateCurrentCV(c=>c.skills.push({id:uid(), name:''}));
-    renderEditor();
-  });
-  bindRepeatable('skill-name','skills','name');
-  document.querySelectorAll('.skill-rm').forEach(b=>b.addEventListener('click', ()=>{
-    updateCurrentCV(c=>{ c.skills = c.skills.filter(i=>i.id!==b.dataset.id); });
-    renderEditor();
-  }));
-
-  const addLang = document.getElementById('addLangBtn');
-  if(addLang) addLang.addEventListener('click', ()=>{
-    updateCurrentCV(c=>{ if(!c.languages) c.languages=[]; c.languages.push({id:uid(), name:''}); });
-    renderEditor();
-  });
-  bindRepeatable('lang-name','languages','name');
-  document.querySelectorAll('.lang-rm').forEach(b=>b.addEventListener('click', ()=>{
-    updateCurrentCV(c=>{ c.languages = c.languages.filter(i=>i.id!==b.dataset.id); });
-    renderEditor();
-  }));
-
   document.getElementById('previewBtn').addEventListener('click', openPreview);
   document.getElementById('pdfBtn').addEventListener('click', openPreview);
 }
 
-function bindRepeatable(cls, arrKey, field){
-  document.querySelectorAll('.'+cls).forEach(el=>{
-    el.addEventListener('input', ()=>{
-      updateCurrentCV(c=>{
-        const item = c[arrKey].find(i=>i.id===el.dataset.id);
-        if(item) item[field] = el.value;
-      });
+/* ---------------- PERSONAL INFO (own screen) ---------------- */
+function renderPersonalScreen(){
+  backBtn.style.display='block';
+  backBtn.onclick = goHome;
+  const cv = getCurrentCV();
+  const p = cv.personal;
+  main.innerHTML = `
+    <div style="font-size:16px; font-weight:700; margin-bottom:4px;">👤 المعلومات الشخصية</div>
+    <div class="section-intro">هذه المعلومات هي ما ستظهر أولًا للشركات في سيرتك الذاتية.</div>
+    <div class="field photo-box">
+      <div class="photo-preview" id="photoPreview">${cv.photo? `<img src="${cv.photo}">` : 'صورة'}</div>
+      <div class="photo-btns">
+        <button id="uploadPhotoBtn" type="button">اختيار صورة</button>
+        ${cv.photo? '<button id="removePhotoBtn" type="button">إزالة</button>':''}
+        <input type="file" id="photoInput" accept="image/*" style="display:none;">
+      </div>
+    </div>
+    <div class="field"><label>الاسم الكامل</label><input id="f_fullName" value="${attr(p.fullName)}"></div>
+    <div class="field"><label>المسمى الوظيفي</label><input id="f_jobTitle" value="${attr(p.jobTitle)}"></div>
+    <div class="row2">
+      <div class="field"><label>البريد الإلكتروني</label><input id="f_email" value="${attr(p.email)}"></div>
+      <div class="field"><label>رقم الهاتف</label><input id="f_phone" value="${attr(p.phone)}"></div>
+    </div>
+    <div class="field"><label>المدينة</label><input id="f_city" value="${attr(p.city)}"></div>
+    <div class="field"><label>نبذة مختصرة</label><textarea id="f_summary">${p.summary||''}</textarea></div>
+    <div class="bottom-bar" style="position:fixed;">
+      <button class="btn-pdf" id="doneBtn" style="width:100%;">تم</button>
+    </div>
+  `;
+  const bind = (id, path)=>{
+    document.getElementById(id).addEventListener('input', (e)=>{
+      updateCurrentCV(c=>{ c.personal[path] = e.target.value; });
     });
-  });
+  };
+  bind('f_fullName','fullName'); bind('f_jobTitle','jobTitle'); bind('f_email','email');
+  bind('f_phone','phone'); bind('f_city','city'); bind('f_summary','summary');
+
+  document.getElementById('uploadPhotoBtn').addEventListener('click', ()=>document.getElementById('photoInput').click());
+  document.getElementById('photoInput').addEventListener('change', (e)=>handlePhotoUpload(e, renderPersonalScreen));
+  const removeBtn = document.getElementById('removePhotoBtn');
+  if(removeBtn) removeBtn.addEventListener('click', ()=>{ updateCurrentCV(c=>{ c.photo=null; }); renderPersonalScreen(); });
+  document.getElementById('doneBtn').addEventListener('click', goHome);
 }
 
-function handlePhotoUpload(e){
+function handlePhotoUpload(e, onDone){
   const file = e.target.files[0];
   if(!file) return;
   const reader = new FileReader();
@@ -431,11 +361,170 @@ function handlePhotoUpload(e){
       ctx.drawImage(img, sx, sy, size, size, 0, 0, 400, 400);
       const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
       updateCurrentCV(c=>{ c.photo = dataUrl; });
-      renderEditor();
+      onDone();
     };
     img.src = ev.target.result;
   };
   reader.readAsDataURL(file);
+}
+
+/* ---------------- ITEM-LIST screens (experience / education) ---------------- */
+function renderItemListScreen(){
+  backBtn.style.display='block';
+  backBtn.onclick = goHome;
+  const cv = getCurrentCV();
+  const key = state.sectionKey;
+  const meta = SECTION_META[key];
+  const items = cv[key];
+
+  let html = `<div style="font-size:16px; font-weight:700; margin-bottom:4px;">${meta.icon} ${meta.title}</div>
+    <div class="section-intro">إضافة كل ${meta.title} يساعد الشركات على معرفة المزيد عنك ويزيد فرصك.</div>`;
+
+  if(items.length===0){
+    html += `<div class="empty-state" style="padding:30px 10px;">
+      <div class="big">${meta.icon}</div><div>لا يوجد شيء مضاف بعد</div>
+    </div>`;
+  } else {
+    items.forEach(item=>{
+      html += `<div class="item-card" data-id="${item.id}">
+        <div class="item-title">${escapeHtml(item[meta.titleField]) || '—'}</div>
+        <div class="item-sub">${escapeHtml(item[meta.subField]) || ''}</div>
+        <div class="item-dates">${escapeHtml(item.start||'')} — ${escapeHtml(item.end||'')}</div>
+        <div class="item-actions">
+          <button class="edit-item" data-id="${item.id}">✎ تعديل</button>
+          <button class="danger rm-item" data-id="${item.id}">🗑 حذف</button>
+        </div>
+      </div>`;
+    });
+  }
+  html += `<div style="height:70px;"></div>
+    <button class="sticky-add-btn" id="addItemBtn">+ ${meta.addLabel}</button>`;
+  main.innerHTML = html;
+
+  document.getElementById('addItemBtn').addEventListener('click', ()=>{
+    state.screen='item-form'; state.editingItemId=null; render();
+  });
+  document.querySelectorAll('.edit-item').forEach(b=>b.addEventListener('click', ()=>{
+    state.screen='item-form'; state.editingItemId=b.dataset.id; render();
+  }));
+  document.querySelectorAll('.rm-item').forEach(b=>b.addEventListener('click', ()=>{
+    updateCurrentCV(c=>{ c[key] = c[key].filter(i=>i.id!==b.dataset.id); });
+    renderItemListScreen();
+  }));
+}
+
+/* ---------------- ITEM-FORM screen (one experience/education entry) ---------------- */
+function renderItemFormScreen(){
+  backBtn.style.display='block';
+  const key = state.sectionKey;
+  const meta = SECTION_META[key];
+  const cv = getCurrentCV();
+  const isNew = !state.editingItemId;
+  const item = isNew ? null : cv[key].find(i=>i.id===state.editingItemId);
+  backBtn.onclick = ()=>{ state.screen='item-list'; render(); };
+
+  let html = `<div style="font-size:16px; font-weight:700; margin-bottom:14px;">${isNew?'إضافة':'تعديل'} — ${meta.title}</div>`;
+  let row = '';
+  meta.fields.forEach((f,i)=>{
+    const val = item ? (item[f.key]||'') : '';
+    const isHalfOpenPair = f.half && i>0 && meta.fields[i-1].half && !row;
+    const inputTag = f.multiline
+      ? `<textarea id="itf_${f.key}">${val}</textarea>`
+      : `<input id="itf_${f.key}" value="${attr(val)}" ${f.placeholder?`placeholder="${f.placeholder}"`:''}>`;
+    if(f.half){
+      row += `<div class="field"><label>${f.label}</label>${inputTag}</div>`;
+      if(row.split('<div class="field">').length-1 === 2){
+        html += `<div class="row2">${row}</div>`;
+        row = '';
+      }
+    } else {
+      html += `<div class="field"><label>${f.label}</label>${inputTag}</div>`;
+    }
+  });
+  if(row) html += row; // odd leftover half field
+
+  html += `<div class="bottom-bar" style="position:fixed;">
+    ${!isNew?'<button class="btn-preview" id="deleteItemBtn">حذف</button>':''}
+    <button class="btn-pdf" id="saveItemBtn" style="width:100%;">حفظ</button>
+  </div>`;
+  main.innerHTML = html;
+
+  document.getElementById('saveItemBtn').addEventListener('click', ()=>{
+    const values = {};
+    meta.fields.forEach(f=>{ values[f.key] = document.getElementById('itf_'+f.key).value; });
+    updateCurrentCV(c=>{
+      if(isNew){
+        c[key].push(Object.assign({id:uid()}, values));
+      } else {
+        const it = c[key].find(i=>i.id===state.editingItemId);
+        if(it) Object.assign(it, values);
+      }
+    });
+    state.screen='item-list'; state.editingItemId=null; render();
+  });
+  const delBtn = document.getElementById('deleteItemBtn');
+  if(delBtn) delBtn.addEventListener('click', ()=>{
+    updateCurrentCV(c=>{ c[key] = c[key].filter(i=>i.id!==state.editingItemId); });
+    state.screen='item-list'; state.editingItemId=null; render();
+  });
+}
+
+/* ---------------- RATED-LIST screens (skills / languages) ---------------- */
+function renderRatedListScreen(){
+  backBtn.style.display='block';
+  backBtn.onclick = goHome;
+  const cv = getCurrentCV();
+  const key = state.sectionKey;
+  const meta = RATED_META[key];
+  if(!cv[key]) cv[key] = [];
+  const items = cv[key];
+
+  let html = `<div style="font-size:16px; font-weight:700; margin-bottom:4px;">${meta.icon} ${meta.title}</div>
+    <div class="section-intro">أضف ${meta.title} وحدد مستوى إتقانك لكل واحدة بالنجوم.</div>
+    <div class="add-row">
+      <input id="newItemInput" placeholder="${meta.placeholder}">
+      <button id="addItemBtn">إضافة +</button>
+    </div>`;
+
+  if(items.length===0){
+    html += `<div class="empty-state" style="padding:20px 10px;"><div>لا يوجد شيء مضاف بعد</div></div>`;
+  } else {
+    items.forEach(it=>{
+      html += `<div class="rated-item" data-id="${it.id}">
+        <div class="rated-name">${escapeHtml(it.name)}</div>
+        <div class="star-rating" data-id="${it.id}">
+          ${[1,2,3,4,5].map(n=>`<span class="star ${n<=(it.rating||0)?'filled':''}" data-n="${n}">★</span>`).join('')}
+        </div>
+        <button class="rated-rm" data-id="${it.id}">✕</button>
+      </div>`;
+    });
+  }
+  html += `<div style="height:20px;"></div>`;
+  main.innerHTML = html;
+
+  document.getElementById('addItemBtn').addEventListener('click', ()=>{
+    const input = document.getElementById('newItemInput');
+    const val = input.value.trim();
+    if(!val) return;
+    updateCurrentCV(c=>{ if(!c[key]) c[key]=[]; c[key].push({id:uid(), name:val, rating:4}); });
+    renderRatedListScreen();
+  });
+  document.getElementById('newItemInput').addEventListener('keydown', (e)=>{
+    if(e.key==='Enter') document.getElementById('addItemBtn').click();
+  });
+  document.querySelectorAll('.star-rating').forEach(group=>{
+    group.querySelectorAll('.star').forEach(star=>{
+      star.addEventListener('click', ()=>{
+        const id = group.dataset.id, n = parseInt(star.dataset.n,10);
+        updateCurrentCV(c=>{ const it = c[key].find(i=>i.id===id); if(it) it.rating = n; });
+        renderRatedListScreen();
+      });
+    });
+  });
+  document.querySelectorAll('.rated-rm').forEach(b=>b.addEventListener('click', ()=>{
+    updateCurrentCV(c=>{ c[key] = c[key].filter(i=>i.id!==b.dataset.id); });
+    renderRatedListScreen();
+  }));
 }
 
 /* ---------------- PREVIEW / PDF ---------------- */

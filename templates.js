@@ -174,8 +174,8 @@ function renderBoldSidebar(cv, lang, cfg){
     ${!cfg.bubble?`<div style="font-size:14px; font-weight:800; text-align:center; color:${accent}; margin-bottom:2px;">${esc(p.fullName||'')}</div><div style="font-size:9.5px; text-align:center; opacity:.75; margin-bottom:10px;">${esc(p.jobTitle||'')}</div>`:''}
     ${!cfg.bubble && p.summary?`<div style="font-size:9.5px; opacity:.85; margin-bottom:10px;">${esc(p.summary)}</div>`:''}
     ${contactList(p).map(c=>`<div>${esc(c)}</div>`).join('')}
-    ${cv.skills.length?`<div style="margin-top:12px; font-weight:700; color:${accent}; text-transform:uppercase; font-size:9.5px;">${LABELS[lang].skills}</div>${cv.skills.map(s=>`<div style="margin:5px 0; display:flex; justify-content:space-between; gap:6px;"><span>${esc(s.name)}</span>${dotBar(4,5,accent,'rgba(255,255,255,.2)')}</div>`).join('')}`:''}
-    ${cv.languages&&cv.languages.length?`<div style="margin-top:12px; font-weight:700; color:${accent}; text-transform:uppercase; font-size:9.5px;">${LABELS[lang].languages}</div>${cv.languages.map(s=>`<div style="margin:5px 0; display:flex; justify-content:space-between; gap:6px;"><span>${esc(s.name)}</span>${dotBar(4,5,accent,'rgba(255,255,255,.2)')}</div>`).join('')}`:''}
+    ${cv.skills.length?`<div style="margin-top:12px; font-weight:700; color:${accent}; text-transform:uppercase; font-size:9.5px;">${LABELS[lang].skills}</div>${cv.skills.map(s=>`<div style="margin:5px 0; display:flex; justify-content:space-between; gap:6px;"><span>${esc(s.name)}</span>${dotBar(s.rating||4,5,accent,'rgba(255,255,255,.2)')}</div>`).join('')}`:''}
+    ${cv.languages&&cv.languages.length?`<div style="margin-top:12px; font-weight:700; color:${accent}; text-transform:uppercase; font-size:9.5px;">${LABELS[lang].languages}</div>${cv.languages.map(s=>`<div style="margin:5px 0; display:flex; justify-content:space-between; gap:6px;"><span>${esc(s.name)}</span>${dotBar(s.rating||4,5,accent,'rgba(255,255,255,.2)')}</div>`).join('')}`:''}
   </div>`;
   const main = `<div style="width:66%; padding:16px 14px;">
     ${cv.experience.length?bannerHeader(LABELS[lang].experience,accent)+expEntries(cv,accent):''}
@@ -231,7 +231,7 @@ function renderSplitRedNavy(cv, lang){
   const right = `<div style="background:${navyBg}; color:#fff; width:66%; padding:20px 15px;">
     ${cv.education.length?`<div style="font-size:11px; font-weight:800; text-transform:uppercase; border-bottom:1px solid rgba(255,255,255,.25); padding-bottom:4px; margin-bottom:10px;">${LABELS[lang].education}</div>${cv.education.map(x=>timelineItem(x.degree,x.school,`${x.start} - ${x.end}`,'#fff','#fff')).join('')}`:''}
     ${cv.experience.length?`<div style="font-size:11px; font-weight:800; text-transform:uppercase; border-bottom:1px solid rgba(255,255,255,.25); padding-bottom:4px; margin:14px 0 10px;">${LABELS[lang].experience}</div>${cv.experience.map(x=>timelineItem(x.role,x.company,`${x.start} - ${x.end}`,'#fff','#fff')).join('')}`:''}
-    ${cv.skills.length?`<div style="font-size:11px; font-weight:800; text-transform:uppercase; border-bottom:1px solid rgba(255,255,255,.25); padding-bottom:4px; margin:14px 0 10px;">${LABELS[lang].skills}</div>${cv.skills.map(s=>`<div style="font-size:10.5px; margin:5px 0; display:flex; justify-content:space-between;"><span>${esc(s.name)}</span>${dotBar(4,5,'#fff','rgba(255,255,255,.25)')}</div>`).join('')}`:''}
+    ${cv.skills.length?`<div style="font-size:11px; font-weight:800; text-transform:uppercase; border-bottom:1px solid rgba(255,255,255,.25); padding-bottom:4px; margin:14px 0 10px;">${LABELS[lang].skills}</div>${cv.skills.map(s=>`<div style="font-size:10.5px; margin:5px 0; display:flex; justify-content:space-between;"><span>${esc(s.name)}</span>${dotBar(s.rating||4,5,'#fff','rgba(255,255,255,.25)')}</div>`).join('')}`:''}
   </div>`;
   return `<div dir="${tDir(lang)}"><div style="display:flex; min-height:460px;">${left}${right}</div>${footerLine('#999')}</div>`;
 }
