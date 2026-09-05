@@ -15,13 +15,21 @@ function showToast(msg){
   if(!t){
     t = document.createElement('div');
     t.id = 'flyToast';
-    t.style.cssText = 'position:fixed; bottom:88px; left:50%; transform:translateX(-50%) translateY(10px); background:#1e222b; color:#eceef2; border:1px solid #2a2f3a; padding:10px 18px; border-radius:999px; font-size:13px; z-index:100; opacity:0; transition:opacity .25s ease, transform .25s ease; max-width:82%; text-align:center; pointer-events:none; box-shadow:0 6px 20px rgba(0,0,0,.35);';
+    t.style.cssText = 'position:fixed; bottom:88px; left:50%; transform:translateX(-50%) translateY(14px) scale(.9); background:#1e222b; color:#eceef2; border:1px solid #2a2f3a; padding:10px 18px; border-radius:999px; font-size:13px; z-index:100; opacity:0; transition:opacity .3s cubic-bezier(.22,1,.36,1), transform .35s cubic-bezier(.34,1.56,.64,1); max-width:82%; text-align:center; pointer-events:none; box-shadow:0 6px 20px rgba(0,0,0,.35);';
     document.body.appendChild(t);
   }
   t.textContent = msg;
-  requestAnimationFrame(()=>{ t.style.opacity='1'; t.style.transform='translateX(-50%) translateY(0)'; });
+  t.style.transform = 'translateX(-50%) translateY(14px) scale(.9)';
+  t.style.opacity = '0';
+  requestAnimationFrame(()=>{
+    requestAnimationFrame(()=>{
+      t.style.opacity='1'; t.style.transform='translateX(-50%) translateY(0) scale(1)';
+    });
+  });
   clearTimeout(t._hideTimer);
-  t._hideTimer = setTimeout(()=>{ t.style.opacity='0'; t.style.transform='translateX(-50%) translateY(10px)'; }, 1500);
+  t._hideTimer = setTimeout(()=>{
+    t.style.opacity='0'; t.style.transform='translateX(-50%) translateY(14px) scale(.9)';
+  }, 1500);
 }
 
 function uid(){ return 'cv_' + Date.now() + '_' + Math.random().toString(36).slice(2,8); }
@@ -88,6 +96,15 @@ function render(){
   else if(state.screen === 'rated-list') renderRatedListScreen();
 }
 
+/* Re-triggers the screen entrance animation every time #main's content
+   changes — removing then re-adding the class forces the CSS animation
+   to restart (browsers won't replay a still-applied animation). */
+function animateMain(){
+  main.classList.remove('screen-enter');
+  void main.offsetWidth; // force reflow
+  main.classList.add('screen-enter');
+}
+
 /* ---------------- LIST SCREEN (all CVs) ---------------- */
 function renderList(){
   backBtn.style.display = 'none';
@@ -120,6 +137,7 @@ function renderList(){
   }
   html += `<button class="fab" id="newCvBtn">+ سيرة جديدة</button>`;
   main.innerHTML = html;
+  animateMain();
 
   document.querySelectorAll('.cv-card').forEach(card=>{
     card.addEventListener('click', (e)=>{
@@ -188,6 +206,7 @@ function renderTemplatePicker(){
     html += `</div>`;
   });
   main.innerHTML = html;
+  animateMain();
   document.getElementById('backBtn').onclick = ()=>{ state.screen='list'; render(); };
   document.querySelectorAll('.tpl-card').forEach(card=>{
     card.addEventListener('click', ()=>{
@@ -229,16 +248,31 @@ function overallPct(cv){
 }
 function ringSvg(pct){
   const r = 40, c = 2*Math.PI*r;
-  const offset = c * (1 - pct/100);
   return `<div class="ring-wrap">
     <svg width="96" height="96" viewBox="0 0 90 90">
       <circle cx="45" cy="45" r="${r}" stroke="var(--bg-elev2)" stroke-width="8" fill="none"/>
-      <circle cx="45" cy="45" r="${r}" stroke="var(--accent)" stroke-width="8" fill="none"
-        stroke-dasharray="${c}" stroke-dashoffset="${offset}" stroke-linecap="round"
-        transform="rotate(-90 45 45)"/>
+      <circle id="ringFill" cx="45" cy="45" r="${r}" stroke="var(--accent)" stroke-width="8" fill="none"
+        stroke-dasharray="${c}" stroke-dashoffset="${c}" stroke-linecap="round"
+        transform="rotate(-90 45 45)" style="transition:stroke-dashoffset 1s cubic-bezier(.22,1,.36,1);"/>
     </svg>
-    <div class="ring-label">${pct}%</div>
+    <div class="ring-label" id="ringLabel">0%</div>
   </div>`;
+}
+function animateRing(pct){
+  const r = 40, c = 2*Math.PI*r;
+  const fill = document.getElementById('ringFill');
+  const label = document.getElementById('ringLabel');
+  if(!fill) return;
+  requestAnimationFrame(()=>{
+    fill.style.strokeDashoffset = c * (1 - pct/100);
+  });
+  const start = performance.now(), dur = 1000;
+  function tick(now){
+    const t = Math.min(1, (now-start)/dur);
+    label.textContent = Math.round(pct * t) + '%';
+    if(t < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
 }
 
 /* ---------------- HOME (per-CV dashboard) ---------------- */
@@ -298,6 +332,7 @@ function renderHome(){
     </div>`;
 
   main.innerHTML = html;
+  animateMain();
 
   backBtn.onclick = ()=>{ state.screen='list'; render(); };
   document.getElementById('personalRow').addEventListener('click', ()=>{ state.screen='personal'; render(); });
@@ -315,6 +350,7 @@ function renderHome(){
   });
   document.getElementById('previewBtn').addEventListener('click', openPreview);
   document.getElementById('pdfBtn').addEventListener('click', openPreview);
+  animateRing(pct);
 }
 
 /* ---------------- PERSONAL INFO (own screen) ---------------- */
@@ -346,6 +382,7 @@ function renderPersonalScreen(){
       <button class="btn-pdf" id="doneBtn" style="width:100%;">تم</button>
     </div>
   `;
+  animateMain();
   const bind = (id, path)=>{
     document.getElementById(id).addEventListener('input', (e)=>{
       updateCurrentCV(c=>{ c.personal[path] = e.target.value; });
@@ -415,6 +452,7 @@ function renderItemListScreen(){
   html += `<div style="height:70px;"></div>
     <button class="sticky-add-btn" id="addItemBtn">+ ${meta.addLabel}</button>`;
   main.innerHTML = html;
+  animateMain();
 
   document.getElementById('addItemBtn').addEventListener('click', ()=>{
     state.screen='item-form'; state.editingItemId=null; render();
@@ -476,6 +514,7 @@ function renderItemFormScreen(){
     <button class="btn-pdf" id="doneItemBtn" style="width:100%;">تم</button>
   </div>`;
   main.innerHTML = html;
+  animateMain();
 
   meta.fields.forEach(f=>{
     document.getElementById('itf_'+f.key).addEventListener('input', (e)=>{
@@ -532,6 +571,7 @@ function renderRatedListScreen(){
   }
   html += `<div style="height:20px;"></div>`;
   main.innerHTML = html;
+  animateMain();
 
   document.getElementById('addItemBtn').addEventListener('click', ()=>{
     const input = document.getElementById('newItemInput');
